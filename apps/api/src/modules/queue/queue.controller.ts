@@ -12,12 +12,12 @@ export class QueueController {
 
   // POST /queue/check-in — reception check-in, or new-patient intake + check-in 
   @Post("check-in")
-  checkIn(@Body() body: CheckInRequest) {
+  async checkIn(@Body() body: CheckInRequest) {
     let patientId = body.patientId; // if checking in an existing patient, this is already set
 
     if (!patientId && body.newPatient) {
       // no existing patientId, but new patient details were given, register them first
-      patientId = this.patients.create(body.newPatient).id;
+      patientId = (await this.patients.create(body.newPatient)).id;
     }
     if (!patientId) {
       // neither an existing ID nor new patient details, can't proceed
