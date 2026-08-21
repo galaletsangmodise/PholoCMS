@@ -1,43 +1,58 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
-import { randomUUID } from "crypto";
+import { Injectable, NotFoundException, InternalServerErrorException } from "@nestjs/common";
+import { supabase } from "../../lib/supabase";
 import type { Patient } from "@pholo/types";
+
+
+function toPatient(row: any): Patient {
+  return {
+    id: row.id,
+    hprn: row.hprn,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    phoneNumber: row.phone_number,
+    dateOfBirth: row.date_of_birth,
+    allergies: row.allergies,
+    chronicConditions: row.chronic_conditions,
+    currentMedications: row.current_medications,
+    createdAt: row.created_at,
+  };
+}
 
 @Injectable()
 export class PatientsService {
-  private patients = new Map<string, Patient>();
-
-  findById(id: string): Patient {
-    const patient = this.patients.get(id);
-    if (!patient) throw new NotFoundException(`Patient ${id} not found`);
-    return patient;
+  async findById(id: string): Promise<Patient> {
+    const { data, error } = await supabase.from("patients").select("*").eq("id", id).single();
+    if (error || !data) throw new NotFoundException(`Patient ${id} not found`);
+    return toPatient(data);
   }
 
-  findByPhone(phoneNumber: string): Patient | undefined {
-    return [...this.patients.values()].find((p) => p.phoneNumber === phoneNumber);
+  async findByPhone(phoneNumber: string): Promise<Patient | undefined> {
+    const { data, error } = await supabase.from("patients").select("*").eq("phone_number", phoneNumber).maybeSingle();
+    if (error) throw new InternalServerErrorException(error.message);
+    return data ? toPatient(data) : undefined;
   }
 
-  search(query: string): Patient[] {
-    const q = query.toLowerCase();
-    return [...this.patients.values()].filter(
-      (p) =>
-        p.firstName.toLowerCase().includes(q) ||
-        p.lastName.toLowerCase().includes(q) ||
-        p.phoneNumber.includes(q) ||
-        p.hprn?.toLowerCase() === q,
-    );
+  async search(query: string): Promise<Patient[]> {
+    const { data, error } = await supabase
+      .from("patients")
+      .select("*")
+      .or(`first_name.ilike.%${query}%,last_name.ilike.%${query}%,phone_number.ilike.%${query}%,hprn.eq.${query}`);
+    if (error) throw new InternalServerErrorException(error.message);
+    return (data ?? []).map(toPatient);
   }
 
-  create(input: Pick<Patient, "firstName" | "lastName" | "phoneNumber" | "dateOfBirth">): Patient {
-    const patient: Patient = {
-      id: randomUUID(),
-      hprn: null,
-      allergies: [],
-      chronicConditions: [],
-      currentMedications: [],
-      createdAt: new Date().toISOString(),
-      ...input,
-    };
-    this.patients.set(patient.id, patient);
-    return patient;
+  async create(input: Pick<Patient, "firstName" | "lastName" | "phoneNumber" | "dateOfBirth">): Promise<Patient> {
+    const { data, error } = await supabase
+      .from("patients")
+      .insert({
+        first_name: input.firstName,
+        last_name: input.lastName,
+        phone_number: input.phoneNumber,
+        date_of_birth: input.dateOfBirth,
+      })
+      .select()
+      .single();
+    if (error || !data) throw new InternalServerErrorException(error?.message ?? "Failed to create patient");
+    return toPatient(data);
   }
 }
