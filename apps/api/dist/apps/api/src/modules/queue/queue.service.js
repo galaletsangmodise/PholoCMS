@@ -1,61 +1,120 @@
-"use strict";
-var __decorate = (this && this.__decorate) || function (decorators, target, key, desc) {
-    var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-    if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
-    else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-    return c > 3 && r && Object.defineProperty(target, key, r), r;
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.QueueService = void 0;
-const common_1 = require("@nestjs/common");
-const crypto_1 = require("crypto");
-let QueueService = class QueueService {
-    constructor() {
-        this.tickets = new Map(); // in-memory store: ticket ID -> ticket object. Wiped on restart.
-    }
-    checkIn(input) {
-        // Find everyone currently waiting at this exact facility + service point,
-        // so we know what position number to assign the new ticket.
-        const currentWaiting = this.forServicePoint(input.facilityId, input.servicePoint).filter((t) => t.status === "waiting");
-        const ticket = {
-            id: (0, crypto_1.randomUUID)(), // unique ID for this ticket
-            patientId: input.patientId,
-            facilityId: input.facilityId,
-            servicePoint: input.servicePoint,
-            status: "waiting", // every new ticket starts as "waiting"
-            source: input.source, // where the check-in came from (mobile/ussd/walk_in/appointment)
-            queuePosition: currentWaiting.length + 1, // simple position = how many are ahead, plus one
-            checkedInAt: new Date().toISOString(), // timestamp, stored as ISO string
-            calledAt: null, // not called yet
-            completedAt: null, // not completed yet
-        };
-        this.tickets.set(ticket.id, ticket); // save it into the in-memory map
-        return ticket; // hand it back to whoever called checkIn()
-    }
-    forServicePoint(facilityId, servicePoint) {
-        return [...this.tickets.values()] // turn the Map's values into a plain array
-            .filter((t) => t.facilityId === facilityId && t.servicePoint === servicePoint) // only this clinic + service point
-            .sort((a, b) => a.checkedInAt.localeCompare(b.checkedInAt)); // oldest check-in first
-    }
-    snapshot(facilityId, servicePoint) {
-        return {
-            facilityId,
-            servicePoint,
-            tickets: this.forServicePoint(facilityId, servicePoint), // the current state of this queue, ready to send to the frontend
-        };
-    }
-    callNext(facilityId, servicePoint) {
-        // Find the first ticket still "waiting" in line
-        const next = this.forServicePoint(facilityId, servicePoint).find((t) => t.status === "waiting");
-        if (!next)
-            return null; // nobody waiting — nothing to call
-        next.status = "called"; // flip their status
-        next.calledAt = new Date().toISOString(); // record when they were called
-        this.tickets.set(next.id, next); // save the updated ticket back into the map
-        return next;
-    }
-};
-exports.QueueService = QueueService;
-exports.QueueService = QueueService = __decorate([
-    (0, common_1.Injectable)()
-], QueueService);
+import { Injectable, InternalServerErrorException } from "@nestjs/common";
+import { supabase } from "../../lib/supabase";
+import { AuditService } from "../audit/audit.service"; 
+import type { QueueTicket, QueueSnapshot } from "@pholo/types";
+
+function toTicket(row: any): QueueTicket {
+  return {
+    id: row.id,
+    patientId: row.patient_id,
+    facilityId: row.facility_id,
+    servicePoint: row.service_point,
+    status: row.status,
+    source: row.source,
+    queuePosition: row.queue_position,
+    checkedInAt: row.checked_in_at,
+    calledAt: row.called_at,
+    completedAt: row.completed_at,
+  };
+}
+
+// Same placeholder as patients.service.ts 
+const PLACEHOLDER_ACTOR = { actorId: "system-placeholder", actorRole: "reception" as const };
+
+@Injectable()
+export class QueueService {
+  constructor(private readonly audit: AuditService) {}
+
+  async checkIn(input: {
+    patientId: string;
+    facilityId: string;
+    servicePoint: string;
+    source: QueueTicket["source"];
+  }): Promise<QueueTicket> {
+    const { count, error: countError } = await supabase
+      .from("queue_tickets")
+      .select("*", { count: "exact", head: true })
+      .eq("facility_id", input.facilityId)
+      .eq("service_point", input.servicePoint)
+      .eq("status", "waiting");
+    if (countError) throw new InternalServerErrorException(countError.message);
+
+    const { data, error } = await supabase
+      .from("queue_tickets")
+      .insert({
+        patient_id: input.patientId,
+        facility_id: input.facilityId,
+        service_point: input.servicePoint,
+        source: input.source,
+        status: "waiting",
+        queue_position: (count ?? 0) + 1,
+      })
+      .select()
+      .single();
+    if (error || !data) throw new InternalServerErrorException(error?.message ?? "Failed to check in");
+
+    const ticket = toTicket(data);
+
+    await this.audit.log({
+      ...PLACEHOLDER_ACTOR,
+      action: "create",
+      resourceType: "ticket",
+      resourceId: ticket.id,
+    });
+
+    return ticket;
+  }
+
+  async forServicePoint(facilityId: string, servicePoint: string): Promise<QueueTicket[]> {
+    const { data, error } = await supabase
+      .from("queue_tickets")
+      .select("*")
+      .eq("facility_id", facilityId)
+      .eq("service_point", servicePoint)
+      .order("checked_in_at", { ascending: true });
+    if (error) throw new InternalServerErrorException(error.message);
+    return (data ?? []).map(toTicket);
+  }
+
+  async snapshot(facilityId: string, servicePoint: string): Promise<QueueSnapshot> {
+    return {
+      facilityId,
+      servicePoint,
+      tickets: await this.forServicePoint(facilityId, servicePoint),
+    };
+  }
+
+  async callNext(facilityId: string, servicePoint: string): Promise<QueueTicket | null> {
+    const { data: existing, error: findError } = await supabase
+      .from("queue_tickets")
+      .select("*")
+      .eq("facility_id", facilityId)
+      .eq("service_point", servicePoint)
+      .eq("status", "waiting")
+      .order("checked_in_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (findError) throw new InternalServerErrorException(findError.message);
+    if (!existing) return null;
+
+    const { data: updated, error: updateError } = await supabase
+      .from("queue_tickets")
+      .update({ status: "called", called_at: new Date().toISOString() })
+      .eq("id", existing.id)
+      .select()
+      .single();
+    if (updateError || !updated) throw new InternalServerErrorException(updateError?.message ?? "Failed to call next");
+
+    const ticket = toTicket(updated);
+
+    // clinical staff pulling the next patient is a real access event to audit
+    await this.audit.log({
+      ...PLACEHOLDER_ACTOR,
+      actorRole: "clinical", 
+      resourceType: "ticket",
+      resourceId: ticket.id,
+    });
+
+    return ticket;
+  }
+}
