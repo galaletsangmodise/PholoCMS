@@ -1,7 +1,7 @@
 import { Injectable, InternalServerErrorException } from "@nestjs/common";
 import { supabase } from "../../lib/supabase";
+import { AuditService } from "../audit/audit.service"; // new import
 import type { QueueTicket, QueueSnapshot } from "@pholo/types";
-
 
 function toTicket(row: any): QueueTicket {
   return {
@@ -18,16 +18,19 @@ function toTicket(row: any): QueueTicket {
   };
 }
 
+// Same placeholder as patients.service.ts — replace both in one pass once auth exists.
+const PLACEHOLDER_ACTOR = { actorId: "system-placeholder", actorRole: "reception" as const };
+
 @Injectable()
 export class QueueService {
+  constructor(private readonly audit: AuditService) {}
+
   async checkIn(input: {
     patientId: string;
     facilityId: string;
     servicePoint: string;
     source: QueueTicket["source"];
   }): Promise<QueueTicket> {
-    // Count how many are currently waiting at this facility + service point,
-    // so the new ticket gets the next position number.
     const { count, error: countError } = await supabase
       .from("queue_tickets")
       .select("*", { count: "exact", head: true })
@@ -49,7 +52,17 @@ export class QueueService {
       .select()
       .single();
     if (error || !data) throw new InternalServerErrorException(error?.message ?? "Failed to check in");
-    return toTicket(data);
+
+    const ticket = toTicket(data);
+
+    await this.audit.log({
+      ...PLACEHOLDER_ACTOR,
+      action: "create",
+      resourceType: "ticket",
+      resourceId: ticket.id,
+    });
+
+    return ticket;
   }
 
   async forServicePoint(facilityId: string, servicePoint: string): Promise<QueueTicket[]> {
@@ -72,7 +85,6 @@ export class QueueService {
   }
 
   async callNext(facilityId: string, servicePoint: string): Promise<QueueTicket | null> {
-    // Find the oldest ticket still "waiting"
     const { data: existing, error: findError } = await supabase
       .from("queue_tickets")
       .select("*")
@@ -83,7 +95,7 @@ export class QueueService {
       .limit(1)
       .maybeSingle();
     if (findError) throw new InternalServerErrorException(findError.message);
-    if (!existing) return null; // nobody waiting
+    if (!existing) return null;
 
     const { data: updated, error: updateError } = await supabase
       .from("queue_tickets")
@@ -92,6 +104,18 @@ export class QueueService {
       .select()
       .single();
     if (updateError || !updated) throw new InternalServerErrorException(updateError?.message ?? "Failed to call next");
-    return toTicket(updated);
+
+    const ticket = toTicket(updated);
+
+    // clinical staff pulling the next patient is a real access event to audit
+    await this.audit.log({
+      ...PLACEHOLDER_ACTOR,
+      actorRole: "clinical", 
+      action: "update",
+      resourceType: "ticket",
+      resourceId: ticket.id,
+    });
+
+    return ticket;
   }
 }
