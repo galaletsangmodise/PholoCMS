@@ -1,11 +1,12 @@
-import { Module } from "@nestjs/common"; 
-import { QueueController } from "./queue.controller"; // handles incoming HTTP requests for /queue
-import { QueueService } from "./queue.service"; 
-import { PatientsModule } from "../patients/patients.module"; 
+import { Module } from "@nestjs/common";
+import { PatientsController } from "./patients.controller";
+import { PatientsService } from "./patients.service";
+import { AuditModule } from "../audit/audit.module";
 
 @Module({
-  imports: [PatientsModule], 
-  controllers: [QueueController], 
-  providers: [QueueService], 
+  imports: [AuditModule],
+  controllers: [PatientsController],
+  providers: [PatientsService],
+  exports: [PatientsService],
 })
-export class QueueModule {}
+export class PatientsModule {}

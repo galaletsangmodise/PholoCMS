@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, InternalServerErrorException } from "@nestjs/common";
 import { supabase } from "../../lib/supabase";
+import { AuditService } from "../audit/audit.service"; 
 import type { Patient } from "@pholo/types";
-
 
 function toPatient(row: any): Patient {
   return {
@@ -18,8 +18,14 @@ function toPatient(row: any): Patient {
   };
 }
 
+// TEMPORARY: stands in for a real logged-in user until Supabase Auth exists.
+
+const PLACEHOLDER_ACTOR = { actorId: "system-placeholder", actorRole: "reception" as const };
+
 @Injectable()
 export class PatientsService {
+  constructor(private readonly audit: AuditService) {} // Nest injects the AuditService we wired up last batch
+
   async findById(id: string): Promise<Patient> {
     const { data, error } = await supabase.from("patients").select("*").eq("id", id).single();
     if (error || !data) throw new NotFoundException(`Patient ${id} not found`);
@@ -53,6 +59,17 @@ export class PatientsService {
       .select()
       .single();
     if (error || !data) throw new InternalServerErrorException(error?.message ?? "Failed to create patient");
-    return toPatient(data);
+
+    const patient = toPatient(data);
+
+  
+    await this.audit.log({
+      ...PLACEHOLDER_ACTOR,
+      action: "create",
+      resourceType: "patient",
+      resourceId: patient.id,
+    });
+
+    return patient;
   }
 }
