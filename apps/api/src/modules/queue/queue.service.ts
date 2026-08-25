@@ -1,6 +1,6 @@
 import { Injectable, InternalServerErrorException } from "@nestjs/common";
 import { supabase } from "../../lib/supabase";
-import { AuditService } from "../audit/audit.service"; // new import
+import { AuditService } from "../audit/audit.service";
 import type { QueueTicket, QueueSnapshot } from "@pholo/types";
 
 function toTicket(row: any): QueueTicket {
@@ -18,7 +18,6 @@ function toTicket(row: any): QueueTicket {
   };
 }
 
-// Same placeholder as patients.service.ts — replace both in one pass once auth exists.
 const PLACEHOLDER_ACTOR = { actorId: "system-placeholder", actorRole: "reception" as const };
 
 @Injectable()
@@ -54,14 +53,7 @@ export class QueueService {
     if (error || !data) throw new InternalServerErrorException(error?.message ?? "Failed to check in");
 
     const ticket = toTicket(data);
-
-    await this.audit.log({
-      ...PLACEHOLDER_ACTOR,
-      action: "create",
-      resourceType: "ticket",
-      resourceId: ticket.id,
-    });
-
+    await this.audit.log({ ...PLACEHOLDER_ACTOR, action: "create", resourceType: "ticket", resourceId: ticket.id });
     return ticket;
   }
 
@@ -106,16 +98,22 @@ export class QueueService {
     if (updateError || !updated) throw new InternalServerErrorException(updateError?.message ?? "Failed to call next");
 
     const ticket = toTicket(updated);
+    await this.audit.log({ ...PLACEHOLDER_ACTOR, actorRole: "clinical", action: "update", resourceType: "ticket", resourceId: ticket.id });
+    return ticket;
+  }
 
-    // clinical staff pulling the next patient is a real access event to audit
-    await this.audit.log({
-      ...PLACEHOLDER_ACTOR,
-      actorRole: "clinical", 
-      action: "update",
-      resourceType: "ticket",
-      resourceId: ticket.id,
-    });
+  // Marks a ticket as done once the clinician finishes the visit.
+  async complete(ticketId: string): Promise<QueueTicket> {
+    const { data, error } = await supabase
+      .from("queue_tickets")
+      .update({ status: "completed", completed_at: new Date().toISOString() })
+      .eq("id", ticketId)
+      .select()
+      .single();
+    if (error || !data) throw new InternalServerErrorException(error?.message ?? "Failed to complete ticket");
 
+    const ticket = toTicket(data);
+    await this.audit.log({ ...PLACEHOLDER_ACTOR, actorRole: "clinical", action: "update", resourceType: "ticket", resourceId: ticket.id });
     return ticket;
   }
 }
