@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common"; 
+import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { QueueService } from "./queue.service";
 import { PatientsService } from "../patients/patients.service";
 import type { CheckInRequest } from "@pholo/types";
@@ -11,10 +11,11 @@ export class QueueController {
   ) {}
 
   @Post("check-in")
-  checkIn(@Body() body: CheckInRequest) {
+  async checkIn(@Body() body: CheckInRequest) {
     let patientId = body.patientId;
     if (!patientId && body.newPatient) {
-      patientId = this.patients.create(body.newPatient) as any; // note: see gap below
+      const created = await this.patients.create(body.newPatient); 
+      patientId = created.id;
     }
     if (!patientId) throw new Error("Either patientId or newPatient is required");
 
@@ -36,7 +37,6 @@ export class QueueController {
     return this.queue.callNext(body.facilityId, body.servicePoint);
   }
 
-  // NEW — POST /queue/:id/complete, called once a clinician finishes an encounter
   @Post(":id/complete")
   complete(@Param("id") id: string) {
     return this.queue.complete(id);
