@@ -20,7 +20,7 @@ function toPatient(row: any): Patient {
 
 // TEMPORARY: stands in for a real logged-in user until Supabase Auth exists.
 
-const PLACEHOLDER_ACTOR = { actorId: "system-placeholder", actorRole: "reception" as const };
+const PLACEHOLDER_ACTOR = { actorId: "00000000-0000-0000-0000-000000000000", actorRole: "reception" as const };
 
 @Injectable()
 export class PatientsService {

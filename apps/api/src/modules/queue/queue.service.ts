@@ -18,7 +18,7 @@ function toTicket(row: any): QueueTicket {
   };
 }
 
-const PLACEHOLDER_ACTOR = { actorId: "system-placeholder", actorRole: "reception" as const };
+const PLACEHOLDER_ACTOR = { actorId: "00000000-0000-0000-0000-000000000000", actorRole: "reception" as const };
 
 @Injectable()
 export class QueueService {
