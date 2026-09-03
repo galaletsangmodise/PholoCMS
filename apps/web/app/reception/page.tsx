@@ -1,82 +1,93 @@
-"use client"; 
+"use client";
 
-import { useEffect, useState, useCallback } from "react"; // React hooks for state, side effects, and memoized functions
-import { api } from "../../lib/api"; 
-import type { Patient, QueueTicket } from "@pholo/types"; 
+import { useEffect, useState, useCallback } from "react";
+import { api } from "../../lib/api";
+import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../lib/auth-context";
+import { RequireAuth } from "../../components/RequireAuth";
+import { useRouter } from "next/navigation";
+import type { Patient, QueueTicket } from "@pholo/types";
 
-// Hardcoded for the first slice, becomes facility/service-point selectors
-// once there's more than one clinic in the system.
 const FACILITY_ID = "clinic-001";
 const SERVICE_POINT = "General OPD";
 
-export default function ReceptionPage() {
-  const [query, setQuery] = useState(""); // what's currently typed in the search box
-  const [results, setResults] = useState<Patient[]>([]); // search results returned from the API
-  const [queue, setQueue] = useState<QueueTicket[]>([]); // the live list of people waiting
-  const [checkingInId, setCheckingInId] = useState<string | null>(null); // tracks which patient's "Check in" button is mid-click, so we can disable it
-  const [newPatientMode, setNewPatientMode] = useState(false); // whether the "register new patient" form is showing
-  const [newPatient, setNewPatient] = useState({ firstName: "", lastName: "", phoneNumber: "", dateOfBirth: "" }); // form fields for a brand-new patient
+function ReceptionContent() {
+  const { profile } = useAuth();
+  const router = useRouter();
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState<Patient[]>([]);
+  const [queue, setQueue] = useState<QueueTicket[]>([]);
+  const [checkingInId, setCheckingInId] = useState<string | null>(null);
+  const [newPatientMode, setNewPatientMode] = useState(false);
+  const [newPatient, setNewPatient] = useState({ firstName: "", lastName: "", phoneNumber: "", dateOfBirth: "" });
 
-  // useCallback so this function has a stable identity across re-renders 
-  // needed because it's used inside useEffect's dependency array below.
   const refreshQueue = useCallback(async () => {
-    const snap = await api.queueSnapshot(FACILITY_ID, SERVICE_POINT); // ask the API for the current state of this queue
-    setQueue(snap.tickets.filter((t) => t.status === "waiting")); // only show people still waiting, not already called
+    const snap = await api.queueSnapshot(FACILITY_ID, SERVICE_POINT);
+    setQueue(snap.tickets.filter((t) => t.status === "waiting"));
   }, []);
 
-  
   useEffect(() => {
-    refreshQueue(); // run once immediately on page load
-    const id = setInterval(refreshQueue, 4000); // then every 4 seconds after that
-    return () => clearInterval(id); // cleanup: stop polling if the component unmounts (e.g. navigating away)
+    refreshQueue();
+    const id = setInterval(refreshQueue, 4000);
+    return () => clearInterval(id);
   }, [refreshQueue]);
 
-  // Live search as you type, with a small debounce so we're not hitting the
-  // API on every single keystroke.
   useEffect(() => {
     if (query.trim().length < 2) {
-      setResults([]); // don't search until there's at least 2 characters
+      setResults([]);
       return;
     }
     const id = setTimeout(async () => {
-      setResults(await api.searchPatients(query)); // wait 250ms after the last keystroke, then actually search
+      setResults(await api.searchPatients(query));
     }, 250);
-    return () => clearTimeout(id); // if the user keeps typing, cancel the pending search and start a new timer
+    return () => clearTimeout(id);
   }, [query]);
 
   async function checkInExisting(patientId: string) {
-    setCheckingInId(patientId); // disables this patient's button and shows "Checking in…"
+    setCheckingInId(patientId);
     try {
       await api.checkIn({ patientId, facilityId: FACILITY_ID, servicePoint: SERVICE_POINT, source: "walk_in" });
-      setQuery(""); // clear the search box
-      setResults([]); // clear the search results
-      await refreshQueue(); // immediately pull the updated queue so the new ticket shows without waiting for the next poll
+      setQuery("");
+      setResults([]);
+      await refreshQueue();
     } finally {
-      setCheckingInId(null); // re-enable buttons whether it succeeded or failed
+      setCheckingInId(null);
     }
   }
 
   async function submitNewPatient(e: React.FormEvent) {
-    e.preventDefault(); // stop the browser's default full-page form submission
+    e.preventDefault();
     await api.checkIn({
-      newPatient, // no patientId tells the API "create this person, then check them in"
+      newPatient,
       facilityId: FACILITY_ID,
       servicePoint: SERVICE_POINT,
       source: "walk_in",
     });
-    setNewPatient({ firstName: "", lastName: "", phoneNumber: "", dateOfBirth: "" }); // reset the form
-    setNewPatientMode(false); // hide the form again
-    await refreshQueue(); // show the new ticket immediately
+    setNewPatient({ firstName: "", lastName: "", phoneNumber: "", dateOfBirth: "" });
+    setNewPatientMode(false);
+    await refreshQueue();
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    router.push("/login");
   }
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="border-b border-slate-200 bg-white px-6 py-4">
-        <h1 className="text-lg font-semibold tracking-tight">Reception — {SERVICE_POINT}</h1>
-        <p className="text-sm text-slate-500">{FACILITY_ID}</p>
+      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-6 py-4">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">Reception — {SERVICE_POINT}</h1>
+          <p className="text-sm text-slate-500">{FACILITY_ID}</p>
+        </div>
+        <div className="flex items-center gap-3 text-sm">
+          {profile && <span className="text-slate-500">{profile.fullName}</span>}
+          <button onClick={handleLogout} className="rounded-md px-3 py-1.5 text-slate-500 hover:bg-slate-100">
+            Sign out
+          </button>
+        </div>
       </header>
 
-      {/* Two-column layout: search/check-in on the left, live queue on the right */}
       <div className="grid grid-cols-1 gap-6 p-6 lg:grid-cols-[1.1fr_0.9fr]">
         <section className="rounded-lg border border-slate-200 bg-white p-5">
           <label className="block text-sm font-medium text-slate-700" htmlFor="search">
@@ -84,9 +95,9 @@ export default function ReceptionPage() {
           </label>
           <input
             id="search"
-            autoFocus // cursor starts here when the page loads 
+            autoFocus
             value={query}
-            onChange={(e) => setQuery(e.target.value)} // every keystroke updates `query`, which triggers the search useEffect above
+            onChange={(e) => setQuery(e.target.value)}
             placeholder="Type at least 2 characters…"
             className="mt-1.5 w-full rounded-md border border-slate-300 px-3 py-2.5 text-base focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
           />
@@ -101,7 +112,7 @@ export default function ReceptionPage() {
                   </div>
                   <button
                     onClick={() => checkInExisting(p.id)}
-                    disabled={checkingInId === p.id} // only disables THIS button while THIS patient is checking in
+                    disabled={checkingInId === p.id}
                     className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                   >
                     {checkingInId === p.id ? "Checking in…" : "Check in"}
@@ -111,7 +122,6 @@ export default function ReceptionPage() {
             </ul>
           )}
 
-          {/* Shown when the user typed something but no matches came back */}
           {query.trim().length >= 2 && results.length === 0 && (
             <p className="mt-3 text-sm text-slate-500">
               No match.{" "}
@@ -125,7 +135,6 @@ export default function ReceptionPage() {
             <form onSubmit={submitNewPatient} className="mt-4 space-y-3 border-t border-slate-200 pt-4">
               <p className="text-sm font-medium text-slate-700">New patient intake</p>
               <div className="grid grid-cols-2 gap-3">
-                {/* Each input is "controlled" its value always comes from state, and typing updates that state */}
                 <input required placeholder="First name" value={newPatient.firstName}
                   onChange={(e) => setNewPatient({ ...newPatient, firstName: e.target.value })}
                   className="rounded-md border border-slate-300 px-3 py-2 text-sm" />
@@ -151,7 +160,6 @@ export default function ReceptionPage() {
           )}
         </section>
 
-        {/* Live queue panel */}
         <section className="rounded-lg border border-slate-200 bg-white p-5">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-sm font-medium text-slate-700">Waiting — live</h2>
@@ -177,5 +185,15 @@ export default function ReceptionPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+// The page itself just wraps the real content in RequireAuth — keeps the
+// auth-checking concern separate from reception's own logic.
+export default function ReceptionPage() {
+  return (
+    <RequireAuth>
+      <ReceptionContent />
+    </RequireAuth>
   );
 }
